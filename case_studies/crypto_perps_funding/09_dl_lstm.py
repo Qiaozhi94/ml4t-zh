@@ -1,0 +1,146 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: tags,-all
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.3
+#   kernelspec:
+#     display_name: Python 3 (ipykernel)
+#     language: python
+#     name: python3
+# ---
+
+# %% [markdown]
+# # Linear and recurrent sequence models on the funding-aligned observation grid
+#
+# This execution notebook submits the declared linear-baseline and LSTM regression population to
+# the shared sequence adapter. The adapter seals the exact folds, excludes windows that cross
+# missing 8-hour observations, persists each checkpoint, and verifies fitted-state digests before
+# cached reuse. The linear baseline shares that request contract exactly, so any difference in a
+# later comparison is the architecture rather than the data handling.
+#
+# **Learning objectives**
+#
+# - construct a sequence-model request on an explicit observation cadence;
+# - inspect lookback, gap policy, eligible keys, and checkpoint identity; and
+# - verify that cached reuse refers to the same persisted fitted state.
+#
+# **Book reference:** Chapter 19, recurrent neural networks for time series.
+#
+# **Prerequisites:** finalized crypto labels, features, and purged walk-forward folds; CUDA for the
+# canonical run.
+
+# %%
+import os
+
+import polars as pl
+
+from case_studies.crypto_perps_funding.research_workflow import (
+    REGRESSION_LABELS,
+    declared_contracts,
+    freeze_official_model_population,
+    model_request_catalog,
+    open_study,
+    plan_model_catalog,
+    plan_specs,
+    run_model_plan,
+)
+
+# %% tags=["parameters"]
+EXECUTION_TIER = "canonical"
+SUPERSEDES_POPULATION: str = ""
+# The generation of this notebook's own checkpoint population that this run replaces, if any.
+# Distinct from SUPERSEDES_POPULATION above, which is the case-wide official model population:
+# the two are separate declarations and a refit can move either without moving the other.
+SUPERSEDES_MODEL_POPULATION: str = ""
+WORKSPACE = os.environ.get("ML4T_OUTPUT_DIR", "")
+LABELS = REGRESSION_LABELS
+PREVIEW_REDUCTIONS = {}
+OVERRIDES = {"device": "cuda"}
+
+# %% [markdown]
+# ## Resolve sequence and checkpoint identities
+
+# %%
+study = open_study(execution_tier=EXECUTION_TIER, workspace=WORKSPACE or None)
+official_population = (
+    freeze_official_model_population(study, supersedes=SUPERSEDES_POPULATION or None)
+    if EXECUTION_TIER == "canonical"
+    else None
+)
+requests = model_request_catalog("deep_learning", labels=LABELS, config_prefix=("nlinear", "lstm"))
+requests
+
+# %% tags=["results"]
+plan = plan_model_catalog(
+    study,
+    requests,
+    execution_tier=EXECUTION_TIER,
+    overrides=OVERRIDES,
+    preview_reductions=PREVIEW_REDUCTIONS,
+)
+# Sequence eligibility follows from the resolved gap policy and lookback, so read both from the
+# frozen specification instead of restating the configuration file here.
+resolved_preprocessing = [spec["computation"]["preprocessing"] for spec in plan_specs(plan)]
+contracts = declared_contracts(plan).with_columns(
+    pl.Series("gap_policy", [step["gap_policy"] for step in resolved_preprocessing]),
+    pl.Series("lookback", [step["lookback"] for step in resolved_preprocessing]),
+)
+contracts.select(
+    "label",
+    "config_name",
+    "gap_policy",
+    "lookback",
+    "checkpoint_value",
+    "eligible_rows",
+    "training_hash",
+)
+
+# %% [markdown]
+# The complete case-wide population is recorded before the first fit, so a member that later
+# fails to train cannot quietly disappear from the population it was declared in. This notebook
+# produces one slice of it, and that slice must lie inside the declaration.
+
+# %% tags=["results"]
+if official_population is not None:
+    outside = set(plan.expected_prediction_hashes) - set(official_population.members)
+    if outside:
+        raise RuntimeError(
+            f"{len(outside)} declared checkpoints lie outside the official model population"
+        )
+
+# %% [markdown]
+# ## Execute the declared population
+
+# %% tags=["results"]
+execution = run_model_plan(
+    plan,
+    supersedes=SUPERSEDES_MODEL_POPULATION or None,
+    population_name="crypto-lstm-validation-predictions-v1"
+    if EXECUTION_TIER == "canonical"
+    else None,
+)
+catalog = execution.catalog_rows.sort("label", "config_name", "checkpoint_value")
+if (
+    catalog.height != len(plan.expected_prediction_hashes)
+    or catalog.filter(~pl.col("complete")).height
+):
+    raise RuntimeError("sequence baseline and LSTM checkpoint population is incomplete")
+catalog.select(
+    "label",
+    "config_name",
+    "checkpoint_value",
+    "training_hash",
+    "prediction_hash",
+    "complete",
+)
+
+# %% [markdown]
+# ## Key takeaways and limitations
+#
+# - Sequence eligibility depends on the declared cadence, not adjacent row positions.
+# - Missing observations break a lookback window and reset state according to the resolved policy.
+# - A fixed lookback limits how much earlier information the model can use.
