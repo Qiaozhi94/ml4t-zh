@@ -314,11 +314,7 @@ def test_known_desynced_list_has_no_stale_entries() -> None:
 # the `image/png` GitHub needs. The list must only ever shrink, which the
 # companion test below enforces. `_archive/` notebooks are not shipped to readers
 # but are tracked here for consistency with the sibling debt list above.
-KNOWN_UNRENDERABLE = frozenset(
-    {
-        "case_studies/crypto_perps_funding/_archive/11_autoencoder.ipynb",
-    }
-)
+KNOWN_UNRENDERABLE = frozenset()
 
 
 def _is_plotly_figure_spec(payload: object) -> bool:
