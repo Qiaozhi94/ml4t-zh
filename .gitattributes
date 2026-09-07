@@ -1,0 +1,6 @@
+# Notebook outputs are stripped on commit by the nbstripout clean filter
+# (see also .git/info/attributes). Keeps the private study repo lean even
+# after pulling notebooks that upstream commits with execution outputs.
+*.ipynb filter=nbstripout
+*.zpln filter=nbstripout
+*.ipynb diff=ipynb
