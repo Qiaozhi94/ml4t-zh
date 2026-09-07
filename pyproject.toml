@@ -164,6 +164,9 @@ dependencies = [
     "openpyxl>=3.1",
     "numba>=0.59",
     "papermill>=2.6",
+    # pymupdf (imports as `fitz`, mapped in envs/test_all_imports.py):
+    # scripts/pdf_chapter_to_md.py converts book chapters into Markdown notes.
+    "pymupdf>=1.26",
     # ===================
     # Jupyter
     # ===================

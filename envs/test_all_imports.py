@@ -48,6 +48,7 @@ IMPORT_MAP = {
     "alpaca-py": "alpaca",
     "ml4t-data": "ml4t",
     "python-okx": "okx",
+    "pymupdf": "fitz",
 }
 
 # =========================================================================
