@@ -59,6 +59,7 @@ jobs:
       ml4t: ${{ steps.filter.outputs.ml4t }}
       py312: ${{ steps.filter.outputs.py312 }}
       benchmark: ${{ steps.filter.outputs.benchmark }}
+      dockerhub: ${{ steps.creds.outputs.available }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -83,6 +84,13 @@ jobs:
               - 'pyproject.toml'
               - 'envs/benchmark/Dockerfile'
               - 'envs/benchmark/pyproject.toml'
+      # Without DOCKERHUB_USERNAME/TOKEN every build job dies in login-action
+      # with "Username and password required". Forks and private copies that
+      # cannot push to the ml4t/ namespace set no secrets, so the publish
+      # jobs are skipped instead of failing.
+      - name: Check Docker Hub credentials are configured
+        id: creds
+        run: echo "available=${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
 
   build-ml4t:
     needs: changes
@@ -92,7 +100,8 @@ jobs:
       github.event.inputs.images == 'ml4t') &&
       (github.event_name == 'workflow_dispatch' ||
       github.ref_type == 'tag' ||
-      needs.changes.outputs.ml4t == 'true')
+      needs.changes.outputs.ml4t == 'true') &&
+      needs.changes.outputs.dockerhub == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -243,7 +252,8 @@ jobs:
       github.event.inputs.images == 'py312') &&
       (github.event_name == 'workflow_dispatch' ||
       github.ref_type == 'tag' ||
-      needs.changes.outputs.py312 == 'true')
+      needs.changes.outputs.py312 == 'true') &&
+      needs.changes.outputs.dockerhub == 'true'
 
     steps:
       - name: Free disk space (signature stack + ML deps ~5GB)
@@ -311,7 +321,8 @@ jobs:
       github.event.inputs.images == 'benchmark') &&
       (github.event_name == 'workflow_dispatch' ||
       github.ref_type == 'tag' ||
-      needs.changes.outputs.benchmark == 'true')
+      needs.changes.outputs.benchmark == 'true') &&
+      needs.changes.outputs.dockerhub == 'true'
     strategy:
       fail-fast: false
       matrix:
