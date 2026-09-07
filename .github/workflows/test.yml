@@ -87,8 +87,21 @@ jobs:
       # straight off the filter rather than through `build`, because it gates a
       # job rather than shaping a matrix.
       image_inputs: ${{ steps.filter.outputs.image-inputs }}
+      # Whether this context can reach ml4t/third-edition-test-data at all. The
+      # container jobs below run their every step behind the same check, and a
+      # context without the deploy key leaves them nothing to do, so they are
+      # skipped at the job level instead of pulling an image they cannot use.
+      deploy_key: ${{ steps.reach.outputs.have_key }}
     steps:
       - uses: actions/checkout@v6
+      - name: Can this run reach the test data?
+        id: reach
+        run: |
+          if [ -n "${{ secrets.TEST_DATA_DEPLOY_KEY }}" ]; then
+            echo "have_key=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=" >> "$GITHUB_OUTPUT"
+          fi
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -1145,6 +1158,15 @@ jobs:
     # GitHub's six-hour default.
     timeout-minutes: 30
     steps:
+      # The candidate tarball plus its loaded layers need ~25GB, which a stock
+      # ubuntu-latest runner does not have free: `docker load` died with
+      # `no space left on device` before any test ran. Same clearing as
+      # build-image-candidate above.
+      - name: Free disk space (candidate image needs ~25GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo docker image prune -af
+          df -h /
       # `needs` cannot fail this job, because the condition above is unconditional
       # by design. This step is what turns a broken candidate into a red required
       # check instead of a green one.
@@ -1269,7 +1291,13 @@ jobs:
     name: ${{ matrix.name }}
     timeout-minutes: 60
     needs: [lint, changes]
-    if: needs.changes.outputs.chapter_matrix != '[]'
+    # Upstream keeps these ungated at the job level because a skipped required
+    # check creates no check run and would block a protected branch forever.
+    # This private copy sets no branch protection and holds no deploy key, and
+    # the `container:` image is pulled before any step can run, so there is no
+    # step-level way to free the disk the pull needs. Without the key the job
+    # executes no notebook, so skipping it is the honest state.
+    if: needs.changes.outputs.chapter_matrix != '[]' && needs.changes.outputs.deploy_key == 'yes'
 
     strategy:
       fail-fast: false
@@ -1392,7 +1420,8 @@ jobs:
     name: cs-${{ matrix.case-study }}
     timeout-minutes: 90
     needs: [lint, changes]
-    if: needs.changes.outputs.case_matrix != '[]'
+    # Same reasoning as test-chapters above.
+    if: needs.changes.outputs.case_matrix != '[]' && needs.changes.outputs.deploy_key == 'yes'
 
     strategy:
       fail-fast: false
@@ -1509,7 +1538,8 @@ jobs:
   test-py312:
     timeout-minutes: 45
     needs: [lint, changes]
-    if: needs.changes.outputs.run_py312 == 'true'
+    # Same reasoning as test-chapters above.
+    if: needs.changes.outputs.run_py312 == 'true' && needs.changes.outputs.deploy_key == 'yes'
 
     runs-on: ubuntu-latest
     container:
