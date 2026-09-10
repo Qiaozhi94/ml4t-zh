@@ -11,7 +11,8 @@
 #
 # Trigger policy:
 #   - PR: incremental (path-filtered, only changed chapters)
-#   - Push to main: full suite
+#   - Push to main: full suite, demoted to the always-on gates when the diff is
+#     copy-only (README/docs/offerings script - see the changes job's scope step)
 #   - Weekly: full suite on schedule (Monday 6 AM UTC)
 #   - After Docker Publish: full suite (workflow_run trigger)
 #   - Manual: workflow_dispatch with optional run_all flag
@@ -94,6 +95,70 @@ jobs:
       deploy_key: ${{ steps.reach.outputs.have_key }}
     steps:
       - uses: actions/checkout@v6
+      - name: Is this event's diff copy-only?
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          CHAIN_HEAD: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # The full chapter and case-study matrices exist to catch a diff that
+          # changes what a notebook computes or what a reader installs. A diff
+          # that only moves prose cannot do either, and until 2026-09-10 such a
+          # diff still bought the full ~45 minute matrix on every daily
+          # offerings refresh - a noticeable slice of the monthly Actions
+          # budget for changing three lines of copy.
+          #
+          # This step classifies the event's diff. It only ever DEMOTES the
+          # matrix to the always-on gates (lint, guards, test-unit); it never
+          # promotes, so a miss here costs minutes, never coverage. Any fetch
+          # or diff failure keeps docs_only false, which is the pre-existing
+          # behavior. The weekly full-suite cron and an explicit run_all
+          # dispatch ignore this flag in the build step below, so a classifier
+          # that ever misfires is caught by Monday at the latest.
+          set -u
+          docs_only="false"
+          base="" ; head=""
+          case "$EVENT_NAME" in
+            pull_request)
+              base="$PR_BASE" ; head="$PR_HEAD" ;;
+            push)
+              # A force-push that drops the old tip has no honest base, so it
+              # stays unclassified and the matrix runs whole.
+              if [[ ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
+                base="$PUSH_BEFORE"
+              fi
+              head="$(git rev-parse HEAD)"
+              ;;
+            workflow_run)
+              # The chain trigger runs on the default branch's tip, not the
+              # commit that fired it, so diff the triggering push itself.
+              base="$CHAIN_HEAD~1" ; head="$CHAIN_HEAD" ;;
+          esac
+          if [[ -n "$base" && -n "$head" && "$base" != "$head" ]]; then
+            if git fetch --no-tags --quiet --depth=2 origin "+$base" "+$head" 2>/dev/null; then
+              if files="$(git diff --name-only "$base" "$head" 2>/dev/null)" && [[ -n "$files" ]]; then
+                # Copy-only means every changed file is prose or the one
+                # script whose only output is the README offerings block.
+                # Anything else - a workflow, a test, a notebook - keeps the
+                # full matrix.
+                if ! grep -Evq \
+                  -e '^docs/' \
+                  -e '\.md$' \
+                  -e '^\.github/scripts/update_offerings\.py$' \
+                  -e '^LICENSE$' \
+                  -e '^\.gitignore$' \
+                  <<<"$files"
+                then
+                  docs_only="true"
+                fi
+              fi
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "docs_only=$docs_only"
       - name: Can this run reach the test data?
         id: reach
         run: |
@@ -238,6 +303,19 @@ jobs:
           all="false"
           if [[ "$shared" == "true" ]] || [[ "$schedule" == "true" ]] || [[ "$run_all" == "true" ]] || [[ "$after_docker" == "true" ]] || [[ "$main_push" == "true" ]]; then
             all="true"
+          fi
+          # A copy-only diff (README prose, docs, the generated offerings
+          # block) still runs the always-on gates - lint, guards and test-unit
+          # are what merge requires - but cannot have broken a notebook
+          # pipeline it never touched, so the chapter and case-study matrices
+          # stay empty. Schedule and an explicit run_all dispatch opt back in
+          # above and run whole, which is what keeps the invariant that what
+          # is on `main` has been tested at least weekly regardless of this
+          # classifier's opinion.
+          docs_only="${{ steps.scope.outputs.docs_only }}"
+          if [[ "$all" == "true" && "$docs_only" == "true" && "$schedule" != "true" && "$run_all" != "true" ]]; then
+            all="false"
+            echo "copy-only diff: chapter/case matrices stay empty; always-on gates still run"
           fi
 
           # --- Chapter matrix (all chapters including Ch01 and Ch05) ---
