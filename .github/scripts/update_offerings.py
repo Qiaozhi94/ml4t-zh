@@ -60,6 +60,8 @@ BLURBS = {
     "auditable end to end.",
     "loop-engineering": "Get reliable work out of coding agents: harness design, "
     "verification, and recovery from a bad run.",
+    "ml4t-ai-agents": "Run the whole ML for Trading workflow once, end to end, "
+    "in a single session.",
 }
 
 
