@@ -32,6 +32,7 @@ import argparse
 import json
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timezone
@@ -46,6 +47,7 @@ COURSES_URL = (
 README = Path(__file__).resolve().parents[2] / "README.md"
 EASTERN = ZoneInfo("America/New_York")
 USER_AGENT = "ml4t-readme-offerings"
+RETRY_DELAYS = (5, 15, 45)
 
 NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S
@@ -66,13 +68,32 @@ BLURBS = {
 
 
 def fetch_profile(url: str = PROFILE_URL) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8", "ignore")
-    match = NEXT_DATA_RE.search(body)
-    if not match:
-        raise SystemExit(f"no __NEXT_DATA__ payload in {url}; the page layout changed")
-    return json.loads(match.group(1))["props"]["pageProps"]
+    attempts = 1 + len(RETRY_DELAYS)
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        if attempt:
+            delay = RETRY_DELAYS[attempt - 1]
+            print(
+                f"retrying {url} in {delay}s (attempt {attempt + 1}/{attempts}) after: {last_exc}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8", "ignore")
+            match = NEXT_DATA_RE.search(body)
+            if not match:
+                raise SystemExit(f"no __NEXT_DATA__ payload in {url}; the page layout changed")
+            return json.loads(match.group(1))["props"]["pageProps"]
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 and exc.code != 429:
+                raise
+            last_exc = exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_exc = exc
+    assert last_exc is not None
+    raise last_exc
 
 
 def parse_instant(value: str | None) -> datetime | None:
