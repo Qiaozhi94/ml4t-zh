@@ -58,9 +58,20 @@ jobs:
           echo "::error::apt-get could not install git after three attempts"
           exit 1
 
+      - name: Can this run reach the test data?
+        id: reach
+        run: |
+          if [ -n "${{ secrets.TEST_DATA_DEPLOY_KEY }}" ]; then
+            echo "have_key=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=" >> "$GITHUB_OUTPUT"
+            echo "::notice::No test-data deploy key in this repository, so the weekly chapter run is skipped. Add TEST_DATA_DEPLOY_KEY to enable it; the weekly-drift smoke does not need it."
+          fi
+
       - uses: actions/checkout@v6
 
       - name: Checkout test data
+        if: steps.reach.outputs.have_key
         uses: actions/checkout@v6
         with:
           repository: ml4t/third-edition-test-data
@@ -69,6 +80,7 @@ jobs:
           lfs: false
 
       - name: Seed case study intermediates
+        if: steps.reach.outputs.have_key
         run: |
           mkdir -p $ML4T_OUTPUT_DIR
           if [ -d test-data/intermediates ]; then
@@ -77,6 +89,7 @@ jobs:
 
       - name: Run weekly chapter notebooks
         id: pytest_chapters
+        if: steps.reach.outputs.have_key
         env:
           PYTHONPATH: ${{ github.workspace }}
           TEST_FILTER_INPUT: ${{ github.event.inputs.test_filter }}
@@ -104,7 +117,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload junit report
-        if: always()
+        if: always() && steps.reach.outputs.have_key
         uses: actions/upload-artifact@v4
         with:
           name: junit-weekly
@@ -112,7 +125,7 @@ jobs:
           retention-days: 30
 
       - name: Open issues for failed notebooks
-        if: always() && steps.pytest_chapters.outputs.exit_code != '0'
+        if: always() && steps.reach.outputs.have_key && steps.pytest_chapters.outputs.exit_code != '0'
         uses: actions/github-script@v7
         with:
           script: |
@@ -178,7 +191,7 @@ jobs:
             }
 
       - name: Fail job if pytest failed
-        if: steps.pytest_chapters.outputs.exit_code != '0'
+        if: steps.reach.outputs.have_key && steps.pytest_chapters.outputs.exit_code != '0'
         run: |
           echo "Weekly pytest exited with code ${{ steps.pytest_chapters.outputs.exit_code }}"
           exit 1
